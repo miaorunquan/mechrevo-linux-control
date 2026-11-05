@@ -20,9 +20,9 @@ import traceback
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, Pango
-# ---- Wayland app_id：GTK3 用 g_get_prgname() 作为 xdg app_id。
-# 脚本运行时它是 "python3"/脚本名（实测 "mrv-gui"），而桌面条目叫 mrv-ctl.desktop，
-# GNOME 匹配不到就退回 application-x-executable（dock 显示齿轮图标）。
+
+# —— dock 图标修复：Wayland 的 xdg app_id 必须与 desktop 文件名一致，
+# 否则 GNOME 匹配不到 /usr/share/applications/mrv-ctl.desktop，dock 退回通用图标。
 GLib.set_prgname("mrv-ctl")
 GLib.set_application_name("mrv-ctl 机械革命控制台")
 try:
@@ -1285,8 +1285,13 @@ class MrvApp:
 
 
 def main():
+    # --tray / --hidden / --minimized: 开机自启时不弹主窗口, 只驻留托盘
+    # (show_all 后立即 hide, 在进入主循环前完成 —— 窗口不会被映射出来, 不闪一下)
+    hidden = any(a in ("--tray", "--hidden", "--minimized") for a in sys.argv[1:])
     app = MrvApp()
     app.win.show_all()
+    if hidden:
+        app.win.hide()
     if app.cfg.get("bubble"):
         app.set_bubble(True)
     Gtk.main()
