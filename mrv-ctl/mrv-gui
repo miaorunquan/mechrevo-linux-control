@@ -780,7 +780,11 @@ class MrvApp:
         self.rb_val.set_xalign(1.0)
         rb_line.pack_start(self.rb_val, False, False, 0)
         sec.pack_start(rb_line, False, False, 0)
+        self.rb_row = rb_line
+        self.rb_row.set_no_show_all(True)    # 可见性由 _apply_controls 动态控制
         sw_row = Gtk.Box(spacing=8)
+        self.sw_row = sw_row
+        self.sw_row.set_no_show_all(True)
         sw_row.pack_start(label("颜色", "metric-label"), False, False, 0)
         self.swatches = []
         for rgb in SWATCHES:
@@ -1180,7 +1184,18 @@ class MrvApp:
         if per and self.rb_scale not in self._dragging:
             self.rb_scale.set_value(float(per))
         self.rb_val.set_text(f"{int(self.rb_scale.get_value())} 秒/圈")
-        self.rb_scale.set_sensitive(bool(rainbow))
+        # 两种模式互斥: 彩虹只留速度, 单色/关闭只留颜色
+        # (用 no_show_all + set_visible, 否则托盘把窗口 show_all() 时它们会全部冒出来)
+        if getattr(self, "_kbd_ui_rainbow", None) != bool(rainbow):
+            self._kbd_ui_rainbow = bool(rainbow)
+            for row, show in ((self.rb_row, bool(rainbow)), (self.sw_row, not rainbow)):
+                # 注意: 对设了 no_show_all 的容器调 show_all() 是空操作,
+                # 必须先解除保护把它连同子控件显示出来, 再重新上锁。
+                row.set_no_show_all(not show)
+                if show:
+                    row.show_all()
+                row.set_no_show_all(True)
+                row.set_visible(show)
         self.sec_kbd.plan.set_text("彩虹动画" if rainbow else (f"RGB {' '.join(map(str, rgb))}" if rgb else ""))
         self.sec_kbd.meta.set_text(f"亮度 {br} / 200"
                                    + (f" · 彩虹 {int(self.rb_scale.get_value())} 秒/圈" if rainbow else ""))
