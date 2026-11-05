@@ -9,6 +9,7 @@ mrv-gui — 机械革命 Linux 控制台图形界面
 依赖: python3-gi, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1 (托盘, 可选)
 """
 
+import atexit
 import json
 import os
 import socket
@@ -1325,11 +1326,74 @@ class MrvApp:
             self._send({"op": "toggle", "name": key, "value": sw.get_active()})
 
 
+# ---------------------------------------------------------------- 单实例
+# 托盘常驻后从应用菜单再点一次, 不应出现第二个进程和第二个托盘图标。
+# 用 XDG_RUNTIME_DIR 下的 unix socket 做握手: 后启动的进程请求"显示窗口"后退出。
+IPC_SOCK = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "mrv-gui.sock")
+
+
+def _raise_existing():
+    try:
+        c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        c.settimeout(2)
+        c.connect(IPC_SOCK)
+        c.sendall(b"show\n")
+        c.close()
+        dbg("IPC: 检测到已有实例, 请求显示窗口后退出")
+        return True
+    except OSError:
+        return False
+
+
+def _serve_ipc(app):
+    """主实例: 收到 show 就把窗口调出来 (socket 0600, 仅本用户可连)"""
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        srv.bind(IPC_SOCK)
+    except OSError:
+        try:
+            os.unlink(IPC_SOCK)        # 上个进程留下的死 socket
+            srv.bind(IPC_SOCK)
+        except OSError as e:
+            dbg(f"IPC: 无法监听 ({e})")
+            return
+    os.chmod(IPC_SOCK, 0o600)
+    srv.listen(4)
+
+    def loop():
+        while True:
+            try:
+                conn, _ = srv.accept()
+            except OSError:
+                return
+            try:
+                if conn.recv(64).strip() == b"show":
+                    dbg("IPC: 收到 show, 调出窗口")
+                    GLib.idle_add(app.show_main)
+            except OSError:
+                pass
+            finally:
+                conn.close()
+
+    threading.Thread(target=loop, daemon=True, name="mrv-gui-ipc").start()
+
+    def cleanup(*_):
+        try:
+            os.unlink(IPC_SOCK)
+        except OSError:
+            pass
+
+    atexit.register(cleanup)
+
+
 def main():
     # --tray / --hidden / --minimized: 开机自启时不弹主窗口, 只驻留托盘
     # (show_all 后立即 hide, 在进入主循环前完成 —— 窗口不会被映射出来, 不闪一下)
     hidden = any(a in ("--tray", "--hidden", "--minimized") for a in sys.argv[1:])
+    if _raise_existing():        # 已有实例: 把它的窗口调出来, 本进程直接退出
+        return
     app = MrvApp()
+    _serve_ipc(app)
     app.win.show_all()
     if hidden:
         app.win.hide()
