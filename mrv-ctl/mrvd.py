@@ -13,6 +13,7 @@ mrvd — 机械革命苍龙系列 Linux 控制台守护进程
   - IPC 按 SO_PEERCRED 鉴权: 读状态任何人, 写操作需 root 或 sudo/mrv 组
 """
 
+import colorsys
 import fcntl
 import glob
 import grp
@@ -482,8 +483,61 @@ def led_write(name, value):
         return False
 
 
-def kbd_set(brightness=None, rgb=None, effect=None) -> dict:
+# ---------------------------------------------------------------- 软件彩虹
+# 本机实测: INOU 的 rainbow_animation 只作用于机身灯条 (本机无可见灯条),
+# 对键盘背光无任何动作 —— 开彩虹后 10 秒采样, 键盘设备值纹丝不动。
+# 所以彩虹由守护进程逐帧写 multi_intensity 实现 (只写 LED class, 不碰 EC 寄存器)。
+RB_HZ = 6                 # 刷新率 (Hz)
+RB_PERIOD_MIN, RB_PERIOD_MAX = 1.0, 30.0
+RB_PERIOD = min(max(float(load_state().get("rainbow_period") or 6.0),
+                    RB_PERIOD_MIN), RB_PERIOD_MAX)     # 一轮完整色环的秒数 (可运行时改)
+_rb_thread = None
+_rb_stop = threading.Event()
+
+
+def _rb_frame(phase):
+    r, g, b = colorsys.hsv_to_rgb(phase % 1.0, 1.0, 1.0)
+    return [int(x * KBD_API_MAX) for x in (r, g, b)]
+
+
+def _rb_loop():
+    t0 = time.monotonic()
+    while not _rb_stop.is_set():
+        if (_read_int(f"{LED_DIR}/brightness") or 0) > 0:   # 灭灯时不必刷
+            r, g, b = _rb_frame((time.monotonic() - t0) / RB_PERIOD)
+            led_write("multi_intensity",
+                      " ".join(str(api_to_dev(x, LED_CHAN_MAX)) for x in (r, g, b)))
+        _rb_stop.wait(1.0 / RB_HZ)
+
+
+def rainbow_start():
+    global _rb_thread
+    if _rb_thread and _rb_thread.is_alive():
+        return
+    _rb_stop.clear()
+    _rb_thread = threading.Thread(target=_rb_loop, daemon=True, name="mrv-rainbow")
+    _rb_thread.start()
+    log("软件彩虹: 启动")
+
+
+def rainbow_stop():
+    if _rb_thread and _rb_thread.is_alive():
+        _rb_stop.set()
+        _rb_thread.join(timeout=1.5)
+        log("软件彩虹: 停止")
+
+
+def kbd_set(brightness=None, rgb=None, effect=None, period=None) -> dict:
+    global RB_PERIOD
     out = {"ok": True}
+    if period is not None:
+        try:
+            p_v = float(period)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "彩虹速度需为秒数"}
+        RB_PERIOD = min(max(p_v, RB_PERIOD_MIN), RB_PERIOD_MAX)
+        state_update(rainbow_period=RB_PERIOD)
+        out["period"] = RB_PERIOD
     inou = INOU_DIR
     if effect is not None:
         # effect: solid=单色(关闭固件彩虹) rainbow=流畅彩虹 off=全灭
@@ -495,13 +549,16 @@ def kbd_set(brightness=None, rgb=None, effect=None) -> dict:
                 with open(p, "w") as f:
                     f.write("1")
                 out["effect"] = "rainbow"
+                rainbow_start()
             elif effect == "solid":
                 with open(p, "w") as f:
                     f.write("0")
                 out["effect"] = "solid"
+                rainbow_stop()
             elif effect == "off":
                 with open(p, "w") as f:
                     f.write("0")
+                rainbow_stop()
                 if led_write("brightness", "0"):
                     out["effect"] = "off"
                 else:
@@ -896,6 +953,7 @@ def status():
         "kbd_rgb": led_rgb_api(),
         "kbd_brightness": led_brightness_api(),
         "kbd_led": LED_DIR,
+        "kbd_rainbow_period": RB_PERIOD,
         "kbd_rainbow": read_text(f"{INOU_DIR}/rainbow_animation") == "1",
         "toggles": {n: read_text(f"{INOU_DIR}/{n}") == "1" for n in TOGGLES
                     if os.path.exists(f"{INOU_DIR}/{n}")},
@@ -934,7 +992,8 @@ def handle_cmd(cmd):
     if op == "charge":
         return set_charge_limit(int(cmd.get("value", 0)))
     if op == "kbd":
-        return kbd_set(cmd.get("brightness"), cmd.get("rgb"), cmd.get("effect"))
+        return kbd_set(cmd.get("brightness"), cmd.get("rgb"), cmd.get("effect"),
+                       cmd.get("period"))
     if op == "fan":
         val = cmd.get("value", "auto")
         if val in ("auto", "boost"):
@@ -1085,6 +1144,10 @@ def main():
 
     guard = ThermalGuard()
     ac_led_guard = AcLedGuard()
+
+    # 上次选的是彩虹 -> 开机继续 (INOU 属性只记意图, 动画由我们逐帧写)
+    if _read_int(f"{INOU_DIR}/rainbow_animation") == 1:
+        threading.Thread(target=rainbow_start, daemon=True).start()
 
     def on_term(sig, frame):
         log(f"收到信号 {sig}, 收尾...")

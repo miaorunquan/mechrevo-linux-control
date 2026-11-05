@@ -12,6 +12,7 @@ mrvctl — 机械革命 Linux 控制台 CLI
   mrvctl kbd <0-200>                   键盘背光亮度
   mrvctl kbd color <R> <G> <B>         RGB 颜色 (0-200)
   mrvctl kbd effect solid|rainbow|off  灯效
+  mrvctl kbd speed <1-30>              彩虹动画速度 (秒/圈, 越小越快)
   mrvctl charge <20-100>               电池限充
   mrvctl mux query                     独显直连状态查询
   mrvctl mux dgpu|standard --yes       Mux 切换 (需重启生效, 谨慎)
@@ -78,7 +79,9 @@ def cmd_status(r):
     print(f"风扇模式   : {desc}  (高温自动强冷: {guard})")
     print(f"限充阈值   : {fmt(r.get('charge_limit_pct'), '', '%', 'EC 读取失败')}")
     effect = "彩虹" if r.get("kbd_rainbow") else "单色"
-    print(f"键盘灯     : {effect} RGB({r.get('kbd_rgb')}) 亮度 {r.get('kbd_brightness')}")
+    per = r.get("kbd_rainbow_period")
+    speed = f" · 速度 {per:.0f} 秒/圈" if (r.get("kbd_rainbow") and per) else ""
+    print(f"键盘灯     : {effect} RGB({r.get('kbd_rgb')}) 亮度 {r.get('kbd_brightness')}{speed}")
 
 
 def cmd_info(r):
@@ -161,10 +164,18 @@ def main():
             done(r, f"灯效 -> {r.get('effect')}")
         elif rest and rest[0] == "off":
             done(call({"op": "kbd", "brightness": 0}), "背光已关闭")
+        elif len(rest) >= 2 and rest[0] in ("speed", "period"):
+            try:
+                sec = float(rest[1])
+            except ValueError:
+                sys.exit("用法: mrvctl kbd speed <1-30>  (秒/圈)")
+            r = call({"op": "kbd", "period": sec})
+            done(r, f"彩虹速度 -> {r.get('period')} 秒/圈")
         elif rest and rest[0].isdigit():
             r = call({"op": "kbd", "brightness": int(rest[0])})
             done(r, f"背光 -> {r.get('brightness')}/{r.get('max')}")
-        sys.exit("用法: mrvctl kbd <0-200> | kbd color <R> <G> <B> | kbd effect solid|rainbow|off")
+        sys.exit("用法: mrvctl kbd <0-200> | kbd color <R> <G> <B> | "
+                 "kbd effect solid|rainbow|off | kbd speed <1-30>")
     elif op == "charge":
         if not rest or not rest[0].isdigit():
             sys.exit("用法: mrvctl charge <20-100>")
