@@ -89,7 +89,7 @@ for d in /etc/xdg/autostart; do
   [ -d "$d" ] && cat > "$d/mrv-ctl-autostart.desktop" <<'EOF'
 [Desktop Entry]
 Name=mrv-ctl 托盘
-Exec=/usr/bin/mrv-gui
+Exec=/usr/bin/mrv-gui --tray
 Terminal=false
 Type=Application
 X-GNOME-Autostart-enabled=true

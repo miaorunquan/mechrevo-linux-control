@@ -21,6 +21,15 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, Pango
 
+# —— dock 图标修复：Wayland 的 xdg app_id 必须与 desktop 文件名一致，
+# 否则 GNOME 匹配不到 /usr/share/applications/mrv-ctl.desktop，dock 退回通用图标。
+GLib.set_prgname("mrv-ctl")
+GLib.set_application_name("mrv-ctl 机械革命控制台")
+try:
+    Gdk.set_program_class("mrv-ctl")   # X11/XWayland 的 WM_CLASS
+except Exception:
+    pass
+
 try:
     gi.require_version("AyatanaAppIndicator3", "0.1")
     from gi.repository import AyatanaAppIndicator3
@@ -554,6 +563,10 @@ class MrvApp:
         self.win.set_decorated(False)
         self.win.set_resizable(False)
         self.win.set_icon_name("mrv-ctl")
+        try:
+            self.win.set_wmclass("mrv-ctl", "mrv-ctl")
+        except Exception:
+            pass
         rgba = enable_rgba(self.win)
         margin = SHADOW_MARGIN if rgba else 0
         self.win.connect("delete-event", self.on_delete)
@@ -1272,8 +1285,13 @@ class MrvApp:
 
 
 def main():
+    # --tray / --hidden / --minimized: 开机自启时不弹主窗口, 只驻留托盘
+    # (show_all 后立即 hide, 在进入主循环前完成 —— 窗口不会被映射出来, 不闪一下)
+    hidden = any(a in ("--tray", "--hidden", "--minimized") for a in sys.argv[1:])
     app = MrvApp()
     app.win.show_all()
+    if hidden:
+        app.win.hide()
     if app.cfg.get("bubble"):
         app.set_bubble(True)
     Gtk.main()
